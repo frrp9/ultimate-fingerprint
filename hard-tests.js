@@ -137,7 +137,16 @@ export function collectPrototypeLies() {
   // navigator.webdriver own vs proto
   report.webdriverOwn = Object.prototype.hasOwnProperty.call(navigator, "webdriver");
   report.webdriverValue = navigator.webdriver;
-  if (navigator.webdriver === true) flags.push({ type: "danger", text: "webdriver=true" });
+  if (navigator.webdriver === true) {
+    flags.push({
+      type: "danger",
+      id: "webdriver_true",
+      text: "webdriver=true",
+      why: "navigator.webdriver is true — automation (Selenium/WebDriver) or failed antidetect hide.",
+      measured: { webdriver: true, ownProperty: report.webdriverOwn },
+      expected: false,
+    });
+  }
 
   // iframe contentWindow navigator vs top (isolation spoof often fails)
   report.iframeNav = hSafe(() => {
@@ -155,15 +164,36 @@ export function collectPrototypeLies() {
         sameWebdriver: nav.webdriver === navigator.webdriver,
         iframeUA: String(nav.userAgent || "").slice(0, 80),
         iframeWebdriver: nav.webdriver,
+        topUA: String(navigator.userAgent || "").slice(0, 80),
+        topWebdriver: navigator.webdriver,
       };
     } finally {
       iframe.remove();
     }
   });
-  if (report.iframeNav && report.iframeNav.sameUA === false)
-    flags.push({ type: "danger", text: "iframe UA ≠ top UA" });
-  if (report.iframeNav && report.iframeNav.sameWebdriver === false)
-    flags.push({ type: "danger", text: "iframe webdriver ≠ top" });
+  if (report.iframeNav && report.iframeNav.sameUA === false) {
+    flags.push({
+      type: "danger",
+      id: "iframe_ua",
+      text: "iframe UA ≠ top UA",
+      why: "User-Agent differs between top window and about:blank iframe — incomplete multi-realm spoof (common antidetect leak).",
+      measured: report.iframeNav,
+      expected: "identical userAgent in iframe and top",
+    });
+  }
+  if (report.iframeNav && report.iframeNav.sameWebdriver === false) {
+    flags.push({
+      type: "danger",
+      id: "iframe_webdriver",
+      text: "iframe webdriver ≠ top",
+      why: "webdriver flag differs across iframe vs top — spoof applied only to one realm.",
+      measured: {
+        iframe: report.iframeNav.iframeWebdriver,
+        top: report.iframeNav.topWebdriver,
+      },
+      expected: "identical webdriver in both realms",
+    });
+  }
 
   // Proxy detection via instanceof / Reflect
   report.navigatorProxy = hSafe(() => {
@@ -915,16 +945,26 @@ export function collectFontsHard() {
     }
   }
 
-  // document.fonts check if available
+  // document.fonts.check — antidetect/spoof often returns true for every family
   const fontsReady = !!document.fonts;
   let statusCheck = null;
   if (document.fonts?.check) {
+    const fakeName = "DefinitelyNotAFont_XYZ_987_ufp";
     statusCheck = {
       arial: document.fonts.check("12px Arial"),
-      fake: document.fonts.check("12px DefinitelyNotAFont_XYZ_987"),
+      fake: document.fonts.check(`12px "${fakeName}"`),
+      fakeBare: document.fonts.check(`12px ${fakeName}`),
     };
-    // fake font should be false; if true → spoof
-    if (statusCheck.fake === true) flags.push({ type: "danger", text: "fonts.check accepts fake font" });
+    if (statusCheck.fake === true || statusCheck.fakeBare === true) {
+      flags.push({
+        type: "danger",
+        id: "fonts_check_fake",
+        text: "fonts.check accepts fake font",
+        why: "FontFaceSet.check() returned true for a nonsense family. Stock browsers should return false (or only match real installed fonts). Common in antidetect font spoof layers that whitelist/always-true check().",
+        measured: statusCheck,
+        expected: { fake: false, fakeBare: false },
+      });
+    }
   }
 
   if (!flags.length) flags.push({ type: "ok", text: "font metrics ok" });
@@ -1012,7 +1052,21 @@ export async function collectWebGPU() {
       label: "WebGPU",
       entropy: 8,
       source: "modern GPU surface",
-      items: { supported: true, adapter: null, flags: [{ type: "warn", text: "no GPU adapter" }] },
+      items: {
+        supported: true,
+        adapter: null,
+        gpuPresent: true,
+        flags: [
+          {
+            type: "warn",
+            id: "webgpu_no_adapter",
+            text: "no GPU adapter",
+            why: "navigator.gpu exists but requestAdapter() returned null. Can be blocked GPU, disabled WebGPU, remote/VM, or antidetect stripping the adapter while leaving the API stub.",
+            measured: { navigatorGpu: true, adapter: null },
+            expected: "non-null GPUAdapter on devices with working WebGPU",
+          },
+        ],
+      },
     };
   }
   let info = null;
@@ -1364,21 +1418,81 @@ export async function collectWorkerHard() {
   URL.revokeObjectURL(url);
 
   const flags = [];
+  // Strict cross-realm compare — antidetect often patches window but not worker
   if (data && !data.error) {
-    if (data.ua !== navigator.userAgent) flags.push({ type: "danger", text: "worker UA ≠ main" });
-    if (data.platform !== navigator.platform)
-      flags.push({ type: "danger", text: "worker platform ≠ main" });
-    if (data.hw !== navigator.hardwareConcurrency)
-      flags.push({ type: "danger", text: "worker HW concurrency ≠ main" });
-    if (data.webdriver !== navigator.webdriver)
-      flags.push({ type: "danger", text: "worker webdriver ≠ main" });
-    if (data.tz !== Intl.DateTimeFormat().resolvedOptions().timeZone)
-      flags.push({ type: "warn", text: "worker timezone ≠ main" });
-    // math engine must match
-    if (data.math && data.math.tan !== Math.tan(-1e300))
-      flags.push({ type: "danger", text: "worker Math ≠ main engine" });
+    if (data.ua !== navigator.userAgent) {
+      flags.push({
+        type: "danger",
+        id: "worker_ua",
+        text: "worker UA ≠ main",
+        why: "Antidetect / spoof layers often patch only the main-world navigator, not DedicatedWorkerGlobalScope.",
+        measured: { worker: data.ua, main: navigator.userAgent },
+        expected: "identical userAgent in worker and main",
+      });
+    }
+    if (data.platform !== navigator.platform) {
+      flags.push({
+        type: "danger",
+        id: "worker_platform",
+        text: "worker platform ≠ main",
+        why: "Platform spoof incomplete across realms (main vs worker).",
+        measured: { worker: data.platform, main: navigator.platform },
+        expected: "identical platform",
+      });
+    }
+    if (data.hw !== navigator.hardwareConcurrency) {
+      flags.push({
+        type: "danger",
+        id: "worker_hw",
+        text: "worker HW concurrency ≠ main",
+        why: "hardwareConcurrency spoof often misses workers.",
+        measured: { worker: data.hw, main: navigator.hardwareConcurrency },
+        expected: "identical hardwareConcurrency",
+      });
+    }
+    // Strict: true vs false, and true vs undefined (incomplete hide)
+    if (data.webdriver !== navigator.webdriver) {
+      flags.push({
+        type: "danger",
+        id: "worker_webdriver",
+        text: "worker webdriver ≠ main",
+        why: "webdriver is inconsistent between main thread and worker. Antidetect often forces navigator.webdriver=false in page JS only; the worker still leaks the real/automation value (or the inverse).",
+        measured: { worker: data.webdriver, main: navigator.webdriver },
+        expected: "strictly equal in both realms (both false, both true, or both undefined)",
+      });
+    }
+    if (data.tz !== Intl.DateTimeFormat().resolvedOptions().timeZone) {
+      flags.push({
+        type: "warn",
+        id: "worker_tz",
+        text: "worker timezone ≠ main",
+        why: "Timezone spoof may only apply in the window realm.",
+        measured: {
+          worker: data.tz,
+          main: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        },
+        expected: "identical IANA timezone",
+      });
+    }
+    if (data.math && data.math.tan !== Math.tan(-1e300)) {
+      flags.push({
+        type: "danger",
+        id: "worker_math",
+        text: "worker Math ≠ main engine",
+        why: "Different JS engine Math results between worker and main is abnormal (or realm isolation bug).",
+        measured: { workerTan: data.math.tan, mainTan: Math.tan(-1e300) },
+        expected: "identical Math.tan(-1e300)",
+      });
+    }
   } else {
-    flags.push({ type: "warn", text: "worker probe failed" });
+    flags.push({
+      type: "warn",
+      id: "worker_fail",
+      text: "worker probe failed",
+      why: "Worker could not run or timed out (blocked workers / CSP / broken environment).",
+      measured: data,
+      expected: "worker response payload",
+    });
   }
   if (!flags.length) flags.push({ type: "ok", text: "worker consistent" });
 
@@ -1457,14 +1571,21 @@ export function collectPluginsHard() {
 // ─── 19. Window chrome / iframe chrome props ─────────────────
 export function collectWindowChrome() {
   const flags = [];
-  // count window keys (automation often injects)
+  // Automation leftovers — anchored names only (avoid matching WebGLRenderbuffer / GPUBuffer)
   const keys = Object.getOwnPropertyNames(window);
-  const suspicious = keys.filter((k) =>
-    /webdriver|__selenium|__driver|__fxdriver|callPhantom|_phantom|domAutomation|cdc_|__playwright|__pw_|__NEXT|buffer|emit|spawn/i.test(
-      k
-    )
-  );
-  if (suspicious.length) flags.push({ type: "danger", text: `window suspects: ${suspicious.slice(0, 5).join(",")}` });
+  const autoRe =
+    /^(cdc_|\$cdc_|\$chrome_|__webdriver|__driver|__selenium|__fxdriver|__lastWatir|__playwright|__pw_|callPhantom|_phantom|domAutomation|domAutomationController|_Selenium)/i;
+  const suspicious = keys.filter((k) => autoRe.test(k));
+  if (suspicious.length) {
+    flags.push({
+      type: "danger",
+      id: "window_automation_keys",
+      text: `window automation keys: ${suspicious.slice(0, 8).join(",")}`,
+      why: "Globals injected by Selenium/CDP/Playwright/Phantom. Legitimate WebGL/WebGPU constructors (WebGLRenderbuffer, GPUBuffer, …) are ignored.",
+      measured: suspicious,
+      expected: "no automation global names on window",
+    });
+  }
 
   // toString tags
   const tags = {
@@ -1621,9 +1742,141 @@ export function collectAllHardFlags(categories) {
     if (Array.isArray(f)) {
       for (const x of f) {
         if (x.type === "ok") continue;
-        flags.push({ ...x, category: c.category });
+        flags.push({
+          ...x,
+          category: c.category,
+          label: c.label,
+          source: c.source,
+        });
       }
     }
   }
   return flags;
+}
+
+/**
+ * Build diagnostic rows for UI: alert + why + measured + expected
+ */
+export function buildDiagnostics(categories) {
+  const rows = [];
+  for (const c of categories) {
+    const flags = c.items?.flags;
+    if (!Array.isArray(flags)) continue;
+    for (const f of flags) {
+      if (f.type === "ok") continue;
+      rows.push({
+        id: f.id || `${c.category}:${f.text}`,
+        severity: f.type || "warn",
+        alert: f.text,
+        category: c.category,
+        categoryLabel: c.label,
+        source: c.source,
+        why:
+          f.why ||
+          defaultWhy(c.category, f.text),
+        measured:
+          f.measured !== undefined
+            ? f.measured
+            : pickMeasured(c, f),
+        expected: f.expected !== undefined ? f.expected : defaultExpected(f.text),
+      });
+    }
+  }
+  // danger first
+  rows.sort((a, b) => {
+    const rank = { danger: 0, warn: 1, info: 2 };
+    return (rank[a.severity] ?? 9) - (rank[b.severity] ?? 9);
+  });
+  return rows;
+}
+
+function defaultWhy(category, text) {
+  const t = String(text || "").toLowerCase();
+  if (t.includes("webdriver"))
+    return "navigator.webdriver (or realm mismatch) indicates automation or an incomplete antidetect hide.";
+  if (t.includes("fonts.check") || t.includes("fake font"))
+    return "FontFaceSet.check() accepted a font family that does not exist — typical of spoofed font APIs in antidetect browsers.";
+  if (t.includes("gpu adapter") || t.includes("webgpu"))
+    return "WebGPU API is exposed but no adapter was returned — blocked GPU, VM, or stubbed WebGPU surface.";
+  if (t.includes("worker"))
+    return "Main thread and DedicatedWorker disagree — spoof often only patches the page window.";
+  if (t.includes("canvas") && t.includes("unstable"))
+    return "Two identical paints produced different pixels — canvas noise / anti-fingerprint injection.";
+  if (t.includes("audio") && t.includes("unstable"))
+    return "Two identical OfflineAudio renders disagree — audio noise injection.";
+  if (t.includes("software") && t.includes("webgl"))
+    return "WebGL reports a software rasterizer (SwiftShader/llvmpipe) — headless, VM, or forced software GL.";
+  if (t.includes("prototype") || t.includes("not native") || t.includes("patched"))
+    return "Native browser function/getter was replaced — JS-level spoof or extension hook.";
+  if (t.includes("cdc") || t.includes("automation") || t.includes("selenium") || t.includes("phantom"))
+    return "Automation framework leftovers detected on the global object.";
+  if (t.includes("iframe"))
+    return "Isolated iframe realm does not match top window — incomplete multi-realm spoof.";
+  if (t.includes("platform") || t.includes("ua-ch") || t.includes("mismatch"))
+    return "Cross-signal identity fields disagree (UA / platform / client hints / GPU).";
+  return `Signal from category “${category}” failed a consistency or anti-spoof check used against antidetect and automation.`;
+}
+
+function defaultExpected(text) {
+  const t = String(text || "").toLowerCase();
+  if (t.includes("fake font")) return "document.fonts.check('12px Nonsense') === false";
+  if (t.includes("webdriver") && t.includes("worker"))
+    return "worker.webdriver === main.webdriver (strict)";
+  if (t.includes("webdriver")) return "navigator.webdriver === false (or undefined on some engines)";
+  if (t.includes("gpu adapter")) return "await navigator.gpu.requestAdapter() → GPUAdapter";
+  if (t.includes("stable")) return "identical hash / samples on repeated measurement";
+  if (t.includes("native") || t.includes("patched")) return "function toString contains [native code]";
+  return "values consistent with a stock browser (no spoof layer)";
+}
+
+function pickMeasured(categoryBlock, flag) {
+  const items = categoryBlock?.items || {};
+  // Prefer structured fields related to the alert
+  const t = String(flag.text || "").toLowerCase();
+  if (t.includes("fake font") && items.fontsCheck) return items.fontsCheck;
+  if (t.includes("webdriver") && items.worker) {
+    return {
+      worker: items.worker?.webdriver,
+      main: items.mainMathTan !== undefined ? navigator.webdriver : items.worker?.webdriver,
+      workerPayload: {
+        webdriver: items.worker?.webdriver,
+        ua: items.worker?.ua,
+        platform: items.worker?.platform,
+      },
+    };
+  }
+  if (categoryBlock.category === "workerHard" && items.worker) {
+    return {
+      worker: {
+        webdriver: items.worker.webdriver,
+        ua: items.worker.ua,
+        platform: items.worker.platform,
+        hw: items.worker.hw,
+        tz: items.worker.tz,
+      },
+      main: {
+        webdriver: navigator.webdriver,
+        ua: navigator.userAgent,
+        platform: navigator.platform,
+        hw: navigator.hardwareConcurrency,
+        tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      },
+    };
+  }
+  if (categoryBlock.category === "webgpu") {
+    return { supported: items.supported, adapter: items.adapter ?? null, info: items.info ?? null };
+  }
+  if (categoryBlock.category === "windowChrome" && items.suspicious) {
+    return { suspicious: items.suspicious, windowKeysCount: items.windowKeysCount };
+  }
+  if (categoryBlock.category === "fontsHard" && items.fontsCheck) return items.fontsCheck;
+  if (items.flags) {
+    const { flags, preview, ...rest } = items;
+    // compact snapshot
+    const keys = Object.keys(rest).slice(0, 12);
+    const snap = {};
+    for (const k of keys) snap[k] = rest[k];
+    return snap;
+  }
+  return null;
 }

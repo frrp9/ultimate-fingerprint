@@ -11,7 +11,7 @@
  * Fully client-side. No backend required.
  */
 
-import { runHardSuite, collectAllHardFlags } from "./hard-tests.js";
+import { runHardSuite, collectAllHardFlags, buildDiagnostics } from "./hard-tests.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -19,6 +19,8 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const state = {
   report: null,
   activeTab: "all",
+  diagFilter: "all",
+  diagnostics: [],
 };
 
 // ─── crypto / hash ───────────────────────────────────────────
@@ -1262,6 +1264,27 @@ function computeTrust(categories) {
   return { score, label, flags: uniq.slice(0, 40), flagCount: uniq.length };
 }
 
+function enrichFlagsWithDiagnostics(categories) {
+  // Ensure every non-ok flag has why/measured/expected for the diag panel
+  const diags = buildDiagnostics(categories);
+  const byKey = new Map(diags.map((d) => [`${d.category}|${d.alert}`, d]));
+  for (const c of categories) {
+    if (!Array.isArray(c.items?.flags)) continue;
+    c.items.flags = c.items.flags.map((f) => {
+      if (f.type === "ok") return f;
+      const d = byKey.get(`${c.category}|${f.text}`);
+      if (!d) return f;
+      return {
+        ...f,
+        why: f.why || d.why,
+        measured: f.measured !== undefined ? f.measured : d.measured,
+        expected: f.expected !== undefined ? f.expected : d.expected,
+      };
+    });
+  }
+  return diags;
+}
+
 // ─── orchestrator ────────────────────────────────────────────
 async function runSuite(onProgress) {
   const steps = [
@@ -1341,6 +1364,7 @@ async function runSuite(onProgress) {
   }
 
   const visitorId = (await sha256(stableStringify(idPayload))).slice(0, 32);
+  const diagnostics = enrichFlagsWithDiagnostics(categories);
   const uniqueness = computeUniqueness(categories);
   const trust = computeTrust(categories);
   const hardFlags = collectAllHardFlags(hard);
@@ -1353,6 +1377,7 @@ async function runSuite(onProgress) {
     uniqueness,
     trust,
     hardFlagCount: hardFlags.length,
+    diagnostics,
     signalCount,
     categories,
     generatedAt: new Date().toISOString(),
@@ -1438,9 +1463,79 @@ function render(report) {
   };
 
   renderCategories(report);
+  state.diagnostics = report.diagnostics || buildDiagnostics(report.categories);
+  renderDiagnostics();
   $("#btn-export").disabled = false;
   $("#btn-copy").disabled = false;
 }
+
+function renderDiagnostics() {
+  const panel = $("#diag-panel");
+  const list = $("#diag-list");
+  const summary = $("#diag-summary");
+  if (!panel || !list) return;
+
+  const all = state.diagnostics || [];
+  const filter = state.diagFilter || "all";
+  const rows =
+    filter === "all" ? all : all.filter((r) => r.severity === filter);
+
+  panel.hidden = false;
+  const dCount = all.filter((r) => r.severity === "danger").length;
+  const wCount = all.filter((r) => r.severity === "warn").length;
+  summary.textContent = all.length
+    ? `${all.length} alert(s) · ${dCount} danger · ${wCount} warn — reason + measured values`
+    : "No spoof / consistency alerts on this run";
+
+  // filter chips
+  $$(".diag-filters .chip").forEach((c) => {
+    c.classList.toggle("active", c.dataset.sev === filter);
+  });
+
+  list.innerHTML = "";
+  if (!rows.length) {
+    list.innerHTML = `<div class="diag-empty">${
+      all.length ? "No alerts in this filter." : "Clean run — nothing to explain."
+    }</div>`;
+    return;
+  }
+
+  for (const r of rows) {
+    const row = document.createElement("article");
+    row.className = "diag-row";
+    row.innerHTML = `
+      <div class="diag-sev ${escapeHtml(r.severity)}">${escapeHtml(r.severity)}</div>
+      <div class="diag-body">
+        <h3>${escapeHtml(r.alert)}</h3>
+        <div class="diag-meta">${escapeHtml(r.categoryLabel || r.category)} · ${escapeHtml(r.source || "")}</div>
+        <p class="diag-why"><strong>Why:</strong> ${escapeHtml(r.why || "")}</p>
+        <div class="diag-grid">
+          <div class="diag-box">
+            <div class="lbl">Measured value</div>
+            <pre></pre>
+          </div>
+          <div class="diag-box">
+            <div class="lbl">Expected</div>
+            <pre></pre>
+          </div>
+        </div>
+      </div>
+    `;
+    const pres = row.querySelectorAll("pre");
+    pres[0].textContent = formatValue(r.measured);
+    pres[1].textContent =
+      typeof r.expected === "string" ? r.expected : formatValue(r.expected);
+    list.appendChild(row);
+  }
+}
+
+// diag filter clicks
+document.addEventListener("click", (e) => {
+  const chip = e.target.closest?.(".diag-filters .chip");
+  if (!chip) return;
+  state.diagFilter = chip.dataset.sev || "all";
+  renderDiagnostics();
+});
 
 function renderCategories(report) {
   const root = $("#report");

@@ -63,6 +63,21 @@
     </div>
   </main>
 
+  <section class="diag-panel" id="diag-panel" hidden>
+    <div class="diag-head">
+      <div>
+        <h2>Diagnostics</h2>
+        <p class="dim" id="diag-summary">Alerts with reason and measured values</p>
+      </div>
+      <div class="diag-filters">
+        <button type="button" class="chip active" data-sev="all">All</button>
+        <button type="button" class="chip" data-sev="danger">Danger</button>
+        <button type="button" class="chip" data-sev="warn">Warn</button>
+      </div>
+    </div>
+    <div class="diag-list" id="diag-list"></div>
+  </section>
+
   <footer class="foot">
     <p>Sources: <a href="https://github.com/abrahamjuliot/creepjs" target="_blank" rel="noreferrer">CreepJS</a> ·
       <a href="https://github.com/fingerprintjs/fingerprintjs" target="_blank" rel="noreferrer">FingerprintJS (OSS)</a> ·
