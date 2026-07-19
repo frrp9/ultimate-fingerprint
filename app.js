@@ -12,6 +12,7 @@
  */
 
 import { runHardSuite, collectAllHardFlags, buildDiagnostics } from "./hard-tests.js";
+import { runHardSuiteV2 } from "./hard-tests-v2.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -1227,8 +1228,8 @@ function computeUniqueness(categories) {
       c.items.error;
     totalEntropy += unsupported ? c.entropy * 0.15 : c.entropy;
   }
-  // map entropy ~40–280 → uniqueness 5–99 (base + hard suite)
-  const score = Math.max(5, Math.min(99, Math.round((totalEntropy / 280) * 100)));
+  // map entropy ~50–420 → uniqueness 5–99 (base + hard v1 + hard v2)
+  const score = Math.max(5, Math.min(99, Math.round((totalEntropy / 420) * 100)));
   return { score, totalEntropy: Math.round(totalEntropy * 10) / 10, collected };
 }
 
@@ -1334,11 +1335,21 @@ async function runSuite(onProgress) {
     }
   }
 
-  onProgress?.(baseWeight * 100, "Hard suite");
+  const hardSpan = 1 - baseWeight;
+  onProgress?.(baseWeight * 100, "Hard suite v1");
   const hard = await runHardSuite((frac, name) => {
-    onProgress?.(baseWeight * 100 + frac * (1 - baseWeight) * 100, `HARD: ${name}`);
+    onProgress?.(baseWeight * 100 + frac * hardSpan * 0.5 * 100, `HARD: ${name}`);
   });
   categories.push(...hard);
+
+  onProgress?.((baseWeight + hardSpan * 0.5) * 100, "Hard suite v2");
+  const hard2 = await runHardSuiteV2((frac, name) => {
+    onProgress?.(
+      (baseWeight + hardSpan * 0.5) * 100 + frac * hardSpan * 0.5 * 100,
+      `HARD2: ${name}`
+    );
+  });
+  categories.push(...hard2);
 
   onProgress?.(100, "Hashing");
 
@@ -1367,7 +1378,7 @@ async function runSuite(onProgress) {
   const diagnostics = enrichFlagsWithDiagnostics(categories);
   const uniqueness = computeUniqueness(categories);
   const trust = computeTrust(categories);
-  const hardFlags = collectAllHardFlags(hard);
+  const hardFlags = [...collectAllHardFlags(hard), ...collectAllHardFlags(hard2)];
 
   let signalCount = 0;
   for (const c of categories) signalCount += Object.keys(c.items || {}).length;

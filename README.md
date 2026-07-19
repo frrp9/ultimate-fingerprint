@@ -32,9 +32,11 @@ This is **not** a fork of CreepJS (trademark restricted for public mirrors). It 
 
 **Base:** Navigator, Client Hints, Screen, Locale/Timezone, Canvas + TextMetrics, WebGL/GPU, AudioContext, Fonts, Storage, JS Engine (Math), DOMRect, CSS system colors, Speech, Media, Permissions, WebRTC, Battery, Features, Tamper, Intl, Performance, Workers.
 
-**Hard suite (detection / anti-spoof):** Prototype lies, JS engine error stacks, Headless/CDP markers, Canvas stability (noise), WebGL hard (software GPU + iframe consistency), Cross-signal consistency, SVG/Emoji geometry, Audio hard stability, Font metrics + `fonts.check` fake, Timing/RFP, WebGPU, CSS media features, Keyboard layout, Storage quota (incognito), Intl hard, Speech hash, Worker hard (math/canvas), Plugins structure, Window/realm, Permissions matrix.
+**Hard suite v1 (detection / anti-spoof):** Prototype lies, JS engine error stacks, Headless/CDP markers, Canvas stability (noise), WebGL hard, Cross-signal consistency, SVG/Emoji, Audio hard, Font metrics + `fonts.check`, Timing/RFP, WebGPU, CSS media, Keyboard, Storage quota, Intl hard, Speech hash, Worker hard, Plugins, Window/realm, Permissions.
 
-Trust score aggregates **danger/warn** flags from every category that exposes lies, automation, or inconsistent spoofing.
+**Hard suite v2 (stronger):** Multi-realm (top/iframe/srcdoc/worker), Identity matrix UA↔UA-CH↔GPU, WebGL shader compiler fingerprint, Geometry/ClientRects stability, CSS.supports entropy, WebRTC SDP codecs, Audio analyser stack, Intl.supportedValuesOf, Prototype/toString integrity, Feature↔UA coherence (FF/Chrome/Safari lies), OffscreenCanvas vs main, Side channels, Speech integrity, Math hard + worker, Automation deep leftovers.
+
+Trust score aggregates **danger/warn** flags. Bottom **Diagnostics** panel explains each alert with measured vs expected values.
 
 ## Local use
 

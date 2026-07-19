@@ -1712,9 +1712,12 @@ export async function runHardSuite(onProgress) {
   ];
 
   const out = [];
-  for (let i = 0; i < steps.length; i++) {
+  const n = steps.length;
+  // leave headroom: v1 is first 55% of hard phase when called alone;
+  // app.js will call v2 separately. Here progress is 0..1 for v1 only.
+  for (let i = 0; i < n; i++) {
     const [name, fn] = steps[i];
-    onProgress?.(i / steps.length, name);
+    onProgress?.(i / n, name);
     try {
       const block = await fn();
       if (block) out.push(block);
