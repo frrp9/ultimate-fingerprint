@@ -30,17 +30,18 @@ function isNative(fn) {
   if (typeof fn !== "function") return false;
   try {
     const s = Function.prototype.toString.call(fn);
-    return /\[native code\]/.test(s) && !/\{[\s\S]*\[native code\][\s\S]*\}/.test(s.replace(/\s/g, " "));
+    return /\[native code\]/.test(s);
   } catch {
     return false;
   }
 }
 
+/** Never invoke prototype getters (Firefox throws TypeError on Navigator.prototype.userAgent). */
 function descriptorLie(obj, prop) {
   try {
     const d = Object.getOwnPropertyDescriptor(obj, prop);
     if (!d) return { exists: false };
-    return {
+    const out = {
       exists: true,
       configurable: d.configurable,
       enumerable: d.enumerable,
@@ -48,16 +49,29 @@ function descriptorLie(obj, prop) {
       hasGetter: typeof d.get === "function",
       hasSetter: typeof d.set === "function",
       getterNative: typeof d.get === "function" ? isNative(d.get) : null,
+      valueNative: typeof d.value === "function" ? isNative(d.value) : null,
       valueType: d.value !== undefined ? typeof d.value : null,
     };
+    return out;
   } catch (e) {
     return { error: String(e.message || e) };
+  }
+}
+
+function methodNativeOn(instance, prop) {
+  try {
+    const fn = instance?.[prop];
+    if (typeof fn !== "function") return null;
+    return isNative(fn);
+  } catch {
+    return null;
   }
 }
 
 // ─── 1. Prototype / API lies (CreepJS-class) ─────────────────
 export function collectPrototypeLies() {
   const flags = [];
+  // Only inspect descriptors on prototypes — never call getters on the prototype itself.
   const apis = [
     ["Navigator", Navigator?.prototype, ["userAgent", "platform", "languages", "hardwareConcurrency", "deviceMemory", "webdriver", "plugins", "mimeTypes", "maxTouchPoints", "vendor", "language"]],
     ["Screen", Screen?.prototype, ["width", "height", "availWidth", "availHeight", "colorDepth", "pixelDepth"]],
@@ -65,8 +79,8 @@ export function collectPrototypeLies() {
     ["CanvasRenderingContext2D", CanvasRenderingContext2D?.prototype, ["getImageData", "fillText", "measureText"]],
     ["WebGLRenderingContext", window.WebGLRenderingContext?.prototype, ["getParameter", "getExtension", "getSupportedExtensions"]],
     ["OfflineAudioContext", (window.OfflineAudioContext || window.webkitOfflineAudioContext)?.prototype, ["startRendering"]],
-    ["Permissions", Permissions?.prototype, ["query"]],
-    ["PluginArray", PluginArray?.prototype, ["item", "namedItem", "refresh"]],
+    ["Permissions", window.Permissions?.prototype, ["query"]],
+    ["PluginArray", window.PluginArray?.prototype, ["item", "namedItem", "refresh"]],
     ["Function", Function.prototype, ["toString", "toLocaleString"]],
   ];
 
@@ -81,8 +95,7 @@ export function collectPrototypeLies() {
     for (const p of props) {
       const d = descriptorLie(proto, p);
       detail[p] = d;
-      // Chrome/Firefox: most of these getters should be native + configurable false/true varies
-      if (typeof proto[p] === "function" && !isNative(proto[p])) {
+      if (d.valueNative === false) {
         patched++;
         flags.push({ type: "danger", text: `${name}.${p} not native` });
       }
@@ -91,8 +104,34 @@ export function collectPrototypeLies() {
         flags.push({ type: "danger", text: `${name}.${p} getter patched` });
       }
     }
-    // own property on instance (should inherit from prototype)
     report[name] = detail;
+  }
+
+  // Instance-bound method native checks (safe: real instances, not prototypes)
+  report.instanceMethods = hSafe(() => {
+    const c = document.createElement("canvas");
+    const gl = c.getContext("webgl") || c.getContext("experimental-webgl");
+    return {
+      canvasToDataURL: methodNativeOn(c, "toDataURL"),
+      canvasGetContext: methodNativeOn(c, "getContext"),
+      webglGetParameter: gl ? methodNativeOn(gl, "getParameter") : null,
+      functionToString: isNative(Function.prototype.toString),
+      permissionsQuery: navigator.permissions
+        ? methodNativeOn(navigator.permissions, "query")
+        : null,
+    };
+  });
+  if (report.instanceMethods?.canvasToDataURL === false) {
+    patched++;
+    flags.push({ type: "danger", text: "canvas.toDataURL not native" });
+  }
+  if (report.instanceMethods?.webglGetParameter === false) {
+    patched++;
+    flags.push({ type: "danger", text: "webgl.getParameter not native" });
+  }
+  if (report.instanceMethods?.functionToString === false) {
+    patched++;
+    flags.push({ type: "danger", text: "Function.toString not native" });
   }
 
   // navigator.webdriver own vs proto
@@ -105,18 +144,21 @@ export function collectPrototypeLies() {
     const iframe = document.createElement("iframe");
     iframe.style.cssText = "position:absolute;width:0;height:0;border:0;left:-9999px";
     document.body.appendChild(iframe);
-    const win = iframe.contentWindow;
-    const nav = win?.navigator;
-    const out = {
-      sameUA: nav?.userAgent === navigator.userAgent,
-      samePlatform: nav?.platform === navigator.platform,
-      sameHW: nav?.hardwareConcurrency === navigator.hardwareConcurrency,
-      sameWebdriver: nav?.webdriver === navigator.webdriver,
-      iframeUA: nav?.userAgent?.slice(0, 80),
-      iframeWebdriver: nav?.webdriver,
-    };
-    document.body.removeChild(iframe);
-    return out;
+    try {
+      const win = iframe.contentWindow;
+      const nav = win?.navigator;
+      if (!nav) return { error: "no iframe navigator" };
+      return {
+        sameUA: nav.userAgent === navigator.userAgent,
+        samePlatform: nav.platform === navigator.platform,
+        sameHW: nav.hardwareConcurrency === navigator.hardwareConcurrency,
+        sameWebdriver: nav.webdriver === navigator.webdriver,
+        iframeUA: String(nav.userAgent || "").slice(0, 80),
+        iframeWebdriver: nav.webdriver,
+      };
+    } finally {
+      iframe.remove();
+    }
   });
   if (report.iframeNav && report.iframeNav.sameUA === false)
     flags.push({ type: "danger", text: "iframe UA ≠ top UA" });
@@ -500,11 +542,15 @@ export async function collectWebGLHard() {
     };
   }
 
-  const dbg = gl.getExtension("WEBGL_debug_renderer_info");
-  const vendor = gl.getParameter(gl.VENDOR);
-  const renderer = gl.getParameter(gl.RENDERER);
-  const unmaskedVendor = dbg ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : null;
-  const unmaskedRenderer = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : null;
+  const dbg = hSafe(() => gl.getExtension("WEBGL_debug_renderer_info"));
+  const vendor = hSafe(() => gl.getParameter(gl.VENDOR));
+  const renderer = hSafe(() => gl.getParameter(gl.RENDERER));
+  const unmaskedVendor = dbg
+    ? hSafe(() => gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL))
+    : null;
+  const unmaskedRenderer = dbg
+    ? hSafe(() => gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL))
+    : renderer;
 
   // Software renderer detection
   const soft =
@@ -1548,8 +1594,22 @@ export async function runHardSuite(onProgress) {
   for (let i = 0; i < steps.length; i++) {
     const [name, fn] = steps[i];
     onProgress?.(i / steps.length, name);
-    const block = await fn();
-    if (block) out.push(block);
+    try {
+      const block = await fn();
+      if (block) out.push(block);
+    } catch (e) {
+      out.push({
+        category: `error_${i}`,
+        label: `${name} (failed)`,
+        entropy: 0,
+        source: "runner",
+        items: {
+          error: String(e?.message || e),
+          stack: String(e?.stack || "").slice(0, 400),
+          flags: [{ type: "warn", text: `${name} threw` }],
+        },
+      });
+    }
   }
   return out;
 }

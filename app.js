@@ -365,7 +365,7 @@ async function collectWebGL() {
     };
   }
 
-  const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+  const dbg = safe(() => gl.getExtension("WEBGL_debug_renderer_info"));
   const params = {};
   const names = [
     "VERSION",
@@ -400,12 +400,16 @@ async function collectWebGL() {
     });
   }
 
+  // Prefer unmasked when available; Firefox deprecates WEBGL_debug_renderer_info
   const unmaskedVendor = dbg
-    ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL)
+    ? safe(() => gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL))
     : null;
   const unmaskedRenderer = dbg
-    ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)
+    ? safe(() => gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL))
     : null;
+  if (!unmaskedRenderer && params.RENDERER) {
+    // keep RENDERER as fallback identity
+  }
 
   const extensions = gl.getSupportedExtensions() || [];
   const aniso = gl.getExtension("EXT_texture_filter_anisotropic") ||
@@ -1290,8 +1294,21 @@ async function runSuite(onProgress) {
   for (let i = 0; i < steps.length; i++) {
     const [name, fn] = steps[i];
     onProgress?.((i / steps.length) * baseWeight * 100, name);
-    const block = await fn();
-    if (block) categories.push(block);
+    try {
+      const block = await fn();
+      if (block) categories.push(block);
+    } catch (e) {
+      categories.push({
+        category: `base_error_${i}`,
+        label: `${name} (failed)`,
+        entropy: 0,
+        source: "runner",
+        items: {
+          error: String(e?.message || e),
+          flags: [{ type: "warn", text: `${name} threw` }],
+        },
+      });
+    }
   }
 
   onProgress?.(baseWeight * 100, "Hard suite");
