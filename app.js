@@ -6,9 +6,12 @@
  * - ClientJS Apache-2.0 — device/screen/plugin/font baselines
  * - AmIUnique / BrowserLeaks-class public techniques
  * - Bot / automation surface checks (webdriver, CDP, chrome runtime)
+ * - hard-tests.js — prototype lies, engine, headless, canvas/audio stability, WebGPU, workers
  *
  * Fully client-side. No backend required.
  */
+
+import { runHardSuite, collectAllHardFlags } from "./hard-tests.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -1218,24 +1221,41 @@ function computeUniqueness(categories) {
       c.items.error;
     totalEntropy += unsupported ? c.entropy * 0.15 : c.entropy;
   }
-  // map entropy ~30–140 → uniqueness 5–99
-  const score = Math.max(5, Math.min(99, Math.round((totalEntropy / 140) * 100)));
+  // map entropy ~40–280 → uniqueness 5–99 (base + hard suite)
+  const score = Math.max(5, Math.min(99, Math.round((totalEntropy / 280) * 100)));
   return { score, totalEntropy: Math.round(totalEntropy * 10) / 10, collected };
 }
 
-function computeTrust(tamperBlock) {
-  const flags = tamperBlock?.items?.flags || [];
-  let score = 100;
+function computeTrust(categories) {
+  const flags = [];
+  for (const c of categories) {
+    const f = c.items?.flags;
+    if (!Array.isArray(f)) continue;
+    for (const x of f) {
+      if (x.type === "ok") continue;
+      flags.push({ ...x, source: c.category });
+    }
+  }
+  // de-dupe by text
+  const seen = new Set();
+  const uniq = [];
   for (const f of flags) {
-    if (f.type === "danger") score -= 25;
-    if (f.type === "warn") score -= 10;
+    const k = `${f.type}|${f.text}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    uniq.push(f);
+  }
+  let score = 100;
+  for (const f of uniq) {
+    if (f.type === "danger") score -= 12;
+    if (f.type === "warn") score -= 5;
   }
   score = Math.max(0, Math.min(100, score));
   let label = "Clean";
   if (score < 40) label = "Highly suspicious";
   else if (score < 70) label = "Anomalies detected";
   else if (score < 90) label = "Minor anomalies";
-  return { score, label, flags };
+  return { score, label, flags: uniq.slice(0, 40), flagCount: uniq.length };
 }
 
 // ─── orchestrator ────────────────────────────────────────────
@@ -1266,31 +1286,47 @@ async function runSuite(onProgress) {
   ];
 
   const categories = [];
+  const baseWeight = 0.55;
   for (let i = 0; i < steps.length; i++) {
     const [name, fn] = steps[i];
-    onProgress?.((i / steps.length) * 100, name);
+    onProgress?.((i / steps.length) * baseWeight * 100, name);
     const block = await fn();
     if (block) categories.push(block);
   }
+
+  onProgress?.(baseWeight * 100, "Hard suite");
+  const hard = await runHardSuite((frac, name) => {
+    onProgress?.(baseWeight * 100 + frac * (1 - baseWeight) * 100, `HARD: ${name}`);
+  });
+  categories.push(...hard);
+
   onProgress?.(100, "Hashing");
 
   // visitor id from high-entropy stable-ish subset
+  const skipId = new Set([
+    "webrtc",
+    "battery",
+    "permissions",
+    "permissionsHard",
+    "performance",
+    "timing",
+    "headless",
+    "prototypeLies",
+    "storageHard",
+  ]);
   const idPayload = {};
   for (const c of categories) {
-    if (["webrtc", "battery", "permissions", "performance"].includes(c.category)) continue;
-    idPayload[c.category] = c.items;
+    if (skipId.has(c.category)) continue;
+    const items = { ...(c.items || {}) };
+    delete items.flags;
+    delete items.preview;
+    idPayload[c.category] = items;
   }
-  // strip previews / volatile
-  if (idPayload.canvas?.preview) {
-    const { preview, ...rest } = idPayload.canvas;
-    idPayload.canvas = rest;
-  }
-  if (idPayload.webrtc) delete idPayload.webrtc;
 
   const visitorId = (await sha256(stableStringify(idPayload))).slice(0, 32);
   const uniqueness = computeUniqueness(categories);
-  const tamper = categories.find((c) => c.category === "tamper");
-  const trust = computeTrust(tamper);
+  const trust = computeTrust(categories);
+  const hardFlags = collectAllHardFlags(hard);
 
   let signalCount = 0;
   for (const c of categories) signalCount += Object.keys(c.items || {}).length;
@@ -1299,6 +1335,7 @@ async function runSuite(onProgress) {
     visitorId,
     uniqueness,
     trust,
+    hardFlagCount: hardFlags.length,
     signalCount,
     categories,
     generatedAt: new Date().toISOString(),
@@ -1346,13 +1383,13 @@ function render(report) {
     report.uniqueness.score > 75 ? "var(--danger)" : report.uniqueness.score > 50 ? "var(--warn)" : "var(--ok)";
 
   $("#trust-score").textContent = `${report.trust.score}/100`;
-  $("#trust-label").textContent = report.trust.label;
+  $("#trust-label").textContent = `${report.trust.label} · ${report.trust.flagCount || 0} flags`;
   const flagsEl = $("#trust-flags");
   flagsEl.innerHTML = "";
-  for (const f of report.trust.flags) {
+  for (const f of report.trust.flags.slice(0, 24)) {
     const li = document.createElement("li");
     li.className = f.type;
-    li.textContent = f.text;
+    li.textContent = f.source ? `${f.text} [${f.source}]` : f.text;
     flagsEl.appendChild(li);
   }
 

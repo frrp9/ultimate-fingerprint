@@ -30,7 +30,11 @@ This is **not** a fork of CreepJS (trademark restricted for public mirrors). It 
 
 ## Categories collected
 
-Navigator, Client Hints (high-entropy), Screen, Locale/Timezone, Canvas + TextMetrics, WebGL/GPU, AudioContext, Fonts, Storage, JS Engine (Math), DOMRect, CSS system colors, Speech voices, Media devices, Permissions, WebRTC, Battery, Feature surface, Tamper/automation, Intl, Performance, Worker consistency.
+**Base:** Navigator, Client Hints, Screen, Locale/Timezone, Canvas + TextMetrics, WebGL/GPU, AudioContext, Fonts, Storage, JS Engine (Math), DOMRect, CSS system colors, Speech, Media, Permissions, WebRTC, Battery, Features, Tamper, Intl, Performance, Workers.
+
+**Hard suite (detection / anti-spoof):** Prototype lies, JS engine error stacks, Headless/CDP markers, Canvas stability (noise), WebGL hard (software GPU + iframe consistency), Cross-signal consistency, SVG/Emoji geometry, Audio hard stability, Font metrics + `fonts.check` fake, Timing/RFP, WebGPU, CSS media features, Keyboard layout, Storage quota (incognito), Intl hard, Speech hash, Worker hard (math/canvas), Plugins structure, Window/realm, Permissions matrix.
+
+Trust score aggregates **danger/warn** flags from every category that exposes lies, automation, or inconsistent spoofing.
 
 ## Local use
 
