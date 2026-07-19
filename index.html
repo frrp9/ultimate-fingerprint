@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Ultimate open-source browser fingerprint analyzer — deep client-side detection suite" />
+  <title>ULTIMATE FINGERPRINT // Deep Analysis Suite</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◉</text></svg>" />
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+  <header class="top">
+    <div class="brand">
+      <span class="pulse"></span>
+      <div>
+        <h1>ULTIMATE FINGERPRINT</h1>
+        <p class="tag">Deep client-side analysis · aggregated from CreepJS · FingerprintJS · AmIUnique-class · BrowserLeaks-class techniques</p>
+      </div>
+    </div>
+    <div class="actions">
+      <button id="btn-run" class="btn primary">Run full suite</button>
+      <button id="btn-export" class="btn" disabled>Export JSON</button>
+      <button id="btn-copy" class="btn" disabled>Copy ID</button>
+    </div>
+  </header>
+
+  <section class="hero" id="summary">
+    <div class="card score-card">
+      <div class="label">Visitor ID</div>
+      <div class="mono big" id="visitor-id">—</div>
+      <div class="meta" id="run-meta">Idle · press Run</div>
+    </div>
+    <div class="card">
+      <div class="label">Uniqueness score</div>
+      <div class="score-ring">
+        <svg viewBox="0 0 120 120">
+          <circle cx="60" cy="60" r="52" class="ring-bg" />
+          <circle cx="60" cy="60" r="52" class="ring-fg" id="score-ring" />
+        </svg>
+        <div class="score-num" id="uniq-score">—</div>
+      </div>
+      <div class="meta" id="uniq-label">Estimated entropy-weighted uniqueness</div>
+    </div>
+    <div class="card">
+      <div class="label">Trust / Tamper</div>
+      <div class="big" id="trust-score">—</div>
+      <div class="meta" id="trust-label">Lie & automation resistance</div>
+      <ul class="flags" id="trust-flags"></ul>
+    </div>
+    <div class="card">
+      <div class="label">Signals collected</div>
+      <div class="big" id="signal-count">0</div>
+      <div class="meta" id="category-count">0 categories</div>
+    </div>
+  </section>
+
+  <nav class="tabs" id="tabs"></nav>
+  <main id="report" class="report">
+    <div class="empty">
+      <p>No analysis yet.</p>
+      <p class="dim">This suite runs entirely in your browser. Nothing is sent to a server.</p>
+    </div>
+  </main>
+
+  <footer class="foot">
+    <p>Sources: <a href="https://github.com/abrahamjuliot/creepjs" target="_blank" rel="noreferrer">CreepJS</a> ·
+      <a href="https://github.com/fingerprintjs/fingerprintjs" target="_blank" rel="noreferrer">FingerprintJS (OSS)</a> ·
+      ClientJS · AmIUnique-class · BrowserLeaks-class · bot detection signals</p>
+    <p class="dim">Educational / defensive research. Client-side only. MIT-style aggregation of public techniques.</p>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
