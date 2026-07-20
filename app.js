@@ -13,6 +13,7 @@
 
 import { runHardSuite, collectAllHardFlags, buildDiagnostics } from "./hard-tests.js";
 import { runHardSuiteV2 } from "./hard-tests-v2.js";
+import { runHardSuiteV3 } from "./hard-tests-v3.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -1228,8 +1229,8 @@ function computeUniqueness(categories) {
       c.items.error;
     totalEntropy += unsupported ? c.entropy * 0.15 : c.entropy;
   }
-  // map entropy ~50–420 → uniqueness 5–99 (base + hard v1 + hard v2)
-  const score = Math.max(5, Math.min(99, Math.round((totalEntropy / 420) * 100)));
+  // map entropy ~60–560 → uniqueness 5–99 (base + hard v1/v2/v3)
+  const score = Math.max(5, Math.min(99, Math.round((totalEntropy / 560) * 100)));
   return { score, totalEntropy: Math.round(totalEntropy * 10) / 10, collected };
 }
 
@@ -1336,20 +1337,27 @@ async function runSuite(onProgress) {
   }
 
   const hardSpan = 1 - baseWeight;
+  const third = hardSpan / 3;
   onProgress?.(baseWeight * 100, "Hard suite v1");
   const hard = await runHardSuite((frac, name) => {
-    onProgress?.(baseWeight * 100 + frac * hardSpan * 0.5 * 100, `HARD: ${name}`);
+    onProgress?.(baseWeight * 100 + frac * third * 100, `HARD: ${name}`);
   });
   categories.push(...hard);
 
-  onProgress?.((baseWeight + hardSpan * 0.5) * 100, "Hard suite v2");
+  onProgress?.((baseWeight + third) * 100, "Hard suite v2");
   const hard2 = await runHardSuiteV2((frac, name) => {
-    onProgress?.(
-      (baseWeight + hardSpan * 0.5) * 100 + frac * hardSpan * 0.5 * 100,
-      `HARD2: ${name}`
-    );
+    onProgress?.((baseWeight + third) * 100 + frac * third * 100, `HARD2: ${name}`);
   });
   categories.push(...hard2);
+
+  onProgress?.((baseWeight + third * 2) * 100, "Hard suite v3");
+  const hard3 = await runHardSuiteV3((frac, name) => {
+    onProgress?.(
+      (baseWeight + third * 2) * 100 + frac * third * 100,
+      `HARD3: ${name}`
+    );
+  });
+  categories.push(...hard3);
 
   onProgress?.(100, "Hashing");
 
@@ -1378,7 +1386,11 @@ async function runSuite(onProgress) {
   const diagnostics = enrichFlagsWithDiagnostics(categories);
   const uniqueness = computeUniqueness(categories);
   const trust = computeTrust(categories);
-  const hardFlags = [...collectAllHardFlags(hard), ...collectAllHardFlags(hard2)];
+  const hardFlags = [
+    ...collectAllHardFlags(hard),
+    ...collectAllHardFlags(hard2),
+    ...collectAllHardFlags(hard3),
+  ];
 
   let signalCount = 0;
   for (const c of categories) signalCount += Object.keys(c.items || {}).length;

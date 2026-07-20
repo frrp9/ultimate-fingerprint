@@ -36,6 +36,8 @@ This is **not** a fork of CreepJS (trademark restricted for public mirrors). It 
 
 **Hard suite v2 (stronger):** Multi-realm (top/iframe/srcdoc/worker), Identity matrix UA↔UA-CH↔GPU, WebGL shader compiler fingerprint, Geometry/ClientRects stability, CSS.supports entropy, WebRTC SDP codecs, Audio analyser stack, Intl.supportedValuesOf, Prototype/toString integrity, Feature↔UA coherence (FF/Chrome/Safari lies), OffscreenCanvas vs main, Side channels, Speech integrity, Math hard + worker, Automation deep leftovers.
 
+**Hard suite v3 (aggressive):** MediaCapabilities + EME/Widevine/FairPlay, RTCRtpSender/Receiver codec caps, Font dual-measure (DOM vs canvas vs fonts.check), Viewport/matchMedia vs screen, Sensors surface, WebAssembly features, Error.stack engine lock, Timezone triple lock (Date vs Intl), Sandboxed iframe isolation, Canvas emoji/path, Plugin/MimeType graph integrity, Performance heap/monotonic timers, ServiceWorker/Cache, Locale matrix, WebGL context attributes (software GL), SharedWorker/BroadcastChannel realms, system-ui CSS fonts.
+
 Trust score aggregates **danger/warn** flags. Bottom **Diagnostics** panel explains each alert with measured vs expected values.
 
 ## Local use
