@@ -71,6 +71,7 @@ body {
 .tag {
   margin: 0.35rem 0 0;
   color: var(--muted);
+  background: transparent;
   font-size: 0.8rem;
   max-width: 62ch;
   line-height: 1.45;
@@ -138,7 +139,7 @@ body {
   min-height: 140px;
 }
 .label {
-  color: var(--muted);
+  color: #c5d0e0;
   font-size: 0.72rem;
   font-family: var(--sans);
   text-transform: uppercase;
@@ -147,7 +148,13 @@ body {
 }
 .big { font-size: 1.55rem; font-weight: 700; word-break: break-all; }
 .mono { font-family: var(--mono); font-size: 1.05rem; letter-spacing: 0.02em; }
-.meta { margin-top: 0.55rem; color: var(--muted); font-size: 0.8rem; font-family: var(--sans); max-width: 42ch; }
+.meta {
+  margin-top: 0.55rem;
+  color: #b8c6d8;
+  font-size: 0.8rem;
+  font-family: var(--sans);
+  max-width: 42ch;
+}
 
 .score-ring {
   position: relative;
