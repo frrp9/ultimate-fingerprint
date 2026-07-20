@@ -17,8 +17,15 @@
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; }
+html {
+  margin: 0;
+  padding: 0;
+  color-scheme: dark;
+  background: var(--bg);
+}
 body {
+  margin: 0;
+  padding: 0;
   font-family: var(--sans);
   background: radial-gradient(1200px 600px at 10% -10%, #122033 0%, transparent 50%),
               radial-gradient(900px 500px at 100% 0%, #0f2a22 0%, transparent 45%),
