@@ -161,7 +161,7 @@ export function collectPrototypeLies() {
         sameUA: nav.userAgent === navigator.userAgent,
         samePlatform: nav.platform === navigator.platform,
         sameHW: nav.hardwareConcurrency === navigator.hardwareConcurrency,
-        sameWebdriver: nav.webdriver === navigator.webdriver,
+        sameWebdriver: (nav.webdriver === true) === (navigator.webdriver === true),
         iframeUA: String(nav.userAgent || "").slice(0, 80),
         iframeWebdriver: nav.webdriver,
         topUA: String(navigator.userAgent || "").slice(0, 80),
@@ -181,18 +181,24 @@ export function collectPrototypeLies() {
       expected: "identical userAgent in iframe and top",
     });
   }
-  if (report.iframeNav && report.iframeNav.sameWebdriver === false) {
-    flags.push({
-      type: "danger",
-      id: "iframe_webdriver",
-      text: "iframe webdriver ≠ top",
-      why: "webdriver flag differs across iframe vs top — spoof applied only to one realm.",
-      measured: {
-        iframe: report.iframeNav.iframeWebdriver,
-        top: report.iframeNav.topWebdriver,
-      },
-      expected: "identical webdriver in both realms",
-    });
+  if (report.iframeNav && !report.iframeNav.error) {
+    const iWd = report.iframeNav.iframeWebdriver === true;
+    const tWd = report.iframeNav.topWebdriver === true;
+    // recompute sameWebdriver with normalization
+    report.iframeNav.sameWebdriverNorm = iWd === tWd;
+    if (iWd !== tWd) {
+      flags.push({
+        type: "danger",
+        id: "iframe_webdriver",
+        text: "iframe webdriver ≠ top",
+        why: "One realm has webdriver===true and the other does not (false/undefined treated equal).",
+        measured: {
+          iframe: report.iframeNav.iframeWebdriver,
+          top: report.iframeNav.topWebdriver,
+        },
+        expected: "both true or both not-true",
+      });
+    }
   }
 
   // Proxy detection via instanceof / Reflect
@@ -945,24 +951,28 @@ export function collectFontsHard() {
     }
   }
 
-  // document.fonts.check — antidetect/spoof often returns true for every family
+  // document.fonts.check — Gecko often returns true for unknown families (fallback).
+  // Only flag the strong spoof pattern: fake accepted AND a real common font rejected.
   const fontsReady = !!document.fonts;
   let statusCheck = null;
   if (document.fonts?.check) {
     const fakeName = "DefinitelyNotAFont_XYZ_987_ufp";
     statusCheck = {
       arial: document.fonts.check("12px Arial"),
+      times: document.fonts.check('12px "Times New Roman"'),
       fake: document.fonts.check(`12px "${fakeName}"`),
       fakeBare: document.fonts.check(`12px ${fakeName}`),
     };
-    if (statusCheck.fake === true || statusCheck.fakeBare === true) {
+    const fakeOk = statusCheck.fake === true || statusCheck.fakeBare === true;
+    const realMissing = statusCheck.arial === false && statusCheck.times === false;
+    if (fakeOk && realMissing) {
       flags.push({
         type: "danger",
-        id: "fonts_check_fake",
-        text: "fonts.check accepts fake font",
-        why: "FontFaceSet.check() returned true for a nonsense family. Stock browsers should return false (or only match real installed fonts). Common in antidetect font spoof layers that whitelist/always-true check().",
+        id: "fonts_check_inverted",
+        text: "fonts.check inverted (fake ok, real fonts missing)",
+        why: "Nonsense family passes fonts.check while common fonts fail — spoofed FontFaceSet. Note: Gecko alone returning true for unknown names is normal and not flagged.",
         measured: statusCheck,
-        expected: { fake: false, fakeBare: false },
+        expected: { fake: false, arial: true },
       });
     }
   }
@@ -1011,8 +1021,18 @@ export function collectTimingResistance() {
 
   // event.timeStamp coarseness not measured here
 
-  if (minStep != null && minStep >= 1) flags.push({ type: "warn", text: `perf.now step≥${minStep}ms (RFP?)` });
-  if (minStep != null && minStep >= 16) flags.push({ type: "warn", text: "perf.now heavily rounded" });
+  // ≥1ms is common (privacy timers / scheduling) — do not flag.
+  // Tor RFP-class coarsening is typically 16.67ms+ or large fixed quanta.
+  if (minStep != null && minStep >= 16) {
+    flags.push({
+      type: "warn",
+      id: "perf_now_rfp",
+      text: "perf.now heavily rounded (≥16ms)",
+      why: "performance.now resolution coarsened like Tor RFP / strict resistFingerprinting — not a normal desktop default alone.",
+      measured: { minStep, sampleCount: samples.length },
+      expected: "sub-ms or low-ms timer resolution on stock browsers",
+    });
+  }
 
   // worker performance.now comparison done elsewhere
 
@@ -1450,15 +1470,17 @@ export async function collectWorkerHard() {
         expected: "identical hardwareConcurrency",
       });
     }
-    // Strict: true vs false, and true vs undefined (incomplete hide)
-    if (data.webdriver !== navigator.webdriver) {
+    // false / undefined / null all mean "not webdriver" on real engines (esp. Gecko workers)
+    const wdMain = navigator.webdriver === true;
+    const wdWorker = data.webdriver === true;
+    if (wdMain !== wdWorker) {
       flags.push({
         type: "danger",
         id: "worker_webdriver",
         text: "worker webdriver ≠ main",
-        why: "webdriver is inconsistent between main thread and worker. Antidetect often forces navigator.webdriver=false in page JS only; the worker still leaks the real/automation value (or the inverse).",
-        measured: { worker: data.webdriver, main: navigator.webdriver },
-        expected: "strictly equal in both realms (both false, both true, or both undefined)",
+        why: "One realm reports webdriver===true and the other does not. (false vs undefined is treated as equivalent on real browsers.)",
+        measured: { worker: data.webdriver, main: navigator.webdriver, workerIsTrue: wdWorker, mainIsTrue: wdMain },
+        expected: "both true or both not-true (false/undefined)",
       });
     }
     if (data.tz !== Intl.DateTimeFormat().resolvedOptions().timeZone) {

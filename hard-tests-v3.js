@@ -725,16 +725,16 @@ export function collectStackHard() {
     });
   }
 
-  // Error.captureStackTrace (V8)
+  // Error.captureStackTrace is V8-only — only flag with Firefox UA when stacks also look V8
   samples.captureStackTrace = typeof Error.captureStackTrace === "function";
-  if (samples.captureStackTrace && /Firefox\//.test(ua)) {
+  if (samples.captureStackTrace && /Firefox\//.test(ua) && engine === "v8-like") {
     flags.push({
       type: "danger",
       id: "capture_stack_ff",
-      text: "Error.captureStackTrace on Firefox UA",
-      why: "V8-only API present under Firefox identity.",
-      measured: { captureStackTrace: true },
-      expected: "undefined on Firefox",
+      text: "Error.captureStackTrace + V8 stacks on Firefox UA",
+      why: "V8-only API and V8-style stacks under Firefox identity — Chromium spoofed as Firefox.",
+      measured: { captureStackTrace: true, engine },
+      expected: "no captureStackTrace and SpiderMonkey stacks on Firefox",
     });
   }
 
@@ -970,14 +970,14 @@ export async function collectIframeIsolation() {
         expected: "identical hardwareConcurrency",
       });
     }
-    if (results.sandboxed.wd !== navigator.webdriver) {
+    if ((results.sandboxed.wd === true) !== (navigator.webdriver === true)) {
       flags.push({
         type: "danger",
         id: "sandbox_wd",
         text: "sandboxed iframe webdriver ≠ top",
-        why: "webdriver hide not applied inside sandbox.",
+        why: "One realm has webdriver===true and the other does not.",
         measured: { sandbox: results.sandboxed.wd, top: navigator.webdriver },
-        expected: "identical webdriver",
+        expected: "both true or both not-true",
       });
     }
   }
@@ -1115,19 +1115,29 @@ export function collectPluginStructure() {
           enabledPluginName: m?.enabledPlugin?.name ?? null,
           enabledPluginIsSelf: tSafe(() => m?.enabledPlugin === p),
         });
-        if (m?.enabledPlugin && m.enabledPlugin !== p) {
-          flags.push({
-            type: "danger",
-            id: "mime_enabled_plugin",
-            text: "mime.enabledPlugin !== parent plugin",
-            why: "Plugin/MimeType graph inconsistent — handmade spoof arrays often break enabledPlugin links.",
-            measured: {
-              plugin: p.name,
-              mime: m.type,
-              enabled: m.enabledPlugin?.name,
-            },
-            expected: "enabledPlugin points back to parent Plugin",
-          });
+        // Real engines may return a different Plugin wrapper object; compare by name/filename.
+        if (m?.enabledPlugin) {
+          const en = m.enabledPlugin;
+          const sameRef = en === p;
+          const sameName = en.name === p.name && en.filename === p.filename;
+          entry.mimes[entry.mimes.length - 1].enabledPluginIsSelf = sameRef;
+          entry.mimes[entry.mimes.length - 1].enabledPluginSameIdentity = sameName;
+          if (!sameRef && !sameName) {
+            flags.push({
+              type: "danger",
+              id: "mime_enabled_plugin",
+              text: "mime.enabledPlugin identity ≠ parent plugin",
+              why: "enabledPlugin name/filename does not match parent Plugin — spoofed PluginArray graph. (Reference inequality alone is normal in some engines.)",
+              measured: {
+                plugin: p.name,
+                pluginFile: p.filename,
+                mime: m.type,
+                enabled: en.name,
+                enabledFile: en.filename,
+              },
+              expected: "enabledPlugin name+filename match parent",
+            });
+          }
         }
       }
       items.details.push(entry);
@@ -1589,14 +1599,15 @@ export async function collectSharedChannels() {
           expected: "identical UA",
         });
       }
-      if (items.sharedWorker.wd !== navigator.webdriver) {
+      // false/undefined/null are equivalent "not automated" on real browsers
+      if ((items.sharedWorker.wd === true) !== (navigator.webdriver === true)) {
         flags.push({
           type: "danger",
           id: "sharedworker_wd",
           text: "SharedWorker webdriver ≠ main",
-          why: "webdriver hide incomplete in SharedWorker.",
+          why: "One realm has webdriver===true and the other does not.",
           measured: { worker: items.sharedWorker.wd, main: navigator.webdriver },
-          expected: "identical webdriver",
+          expected: "both true or both not-true",
         });
       }
     }

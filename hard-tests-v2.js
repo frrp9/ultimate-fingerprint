@@ -119,12 +119,44 @@ export async function collectMultiRealm() {
   }
 
   const realms = [top, iframeBlank, srcdocNav, workerNav].filter(Boolean);
+
+  // Normalize values that legitimately differ in representation across realms
+  const normField = (f, v) => {
+    if (f === "webdriver") return v === true; // false/undefined/null → false
+    if (f === "maxTouch") return v == null ? 0 : Number(v) || 0;
+    if (f === "vendor") return v == null || v === "" ? "" : String(v);
+    if (f === "mem") return v == null ? null : v;
+    return v;
+  };
+
+  // vendor often empty in workers on Gecko — only compare when both sides non-empty
+  // maxTouch / webdriver use normalized equality
   const fields = ["ua", "platform", "language", "hw", "webdriver", "vendor", "maxTouch"];
   const diffs = [];
   for (const f of fields) {
     const vals = realms
       .filter((r) => r && !r.error && f in r)
-      .map((r) => ({ label: r.label, value: r[f] }));
+      .map((r) => ({ label: r.label, raw: r[f], value: normField(f, r[f]) }));
+
+    if (f === "vendor") {
+      const nonempty = vals.filter((v) => v.value !== "");
+      if (nonempty.length >= 2) {
+        const uniq = new Set(nonempty.map((v) => v.value));
+        if (uniq.size > 1) {
+          diffs.push({ field: f, values: vals });
+          flags.push({
+            type: "danger",
+            id: `realm_${f}`,
+            text: `multi-realm ${f} mismatch`,
+            why: `Non-empty navigator.vendor differs across realms (empty worker vendor is ignored — normal on some engines).`,
+            measured: vals,
+            expected: `identical non-empty vendor strings`,
+          });
+        }
+      }
+      continue;
+    }
+
     const uniq = new Set(vals.map((v) => JSON.stringify(v.value)));
     if (uniq.size > 1) {
       diffs.push({ field: f, values: vals });
@@ -132,9 +164,9 @@ export async function collectMultiRealm() {
         type: "danger",
         id: `realm_${f}`,
         text: `multi-realm ${f} mismatch`,
-        why: `Property navigator.${f} differs across top/iframe/srcdoc/worker. Antidetect often patches only the page window.`,
+        why: `Property navigator.${f} differs across top/iframe/srcdoc/worker after normalization. Antidetect often patches only the page window.`,
         measured: vals,
-        expected: `identical ${f} in every realm`,
+        expected: `identical ${f} in every realm (webdriver: true vs not-true; maxTouch: null≡0)`,
       });
     }
   }
