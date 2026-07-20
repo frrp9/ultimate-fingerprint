@@ -25,6 +25,82 @@ const state = {
   diagnostics: [],
 };
 
+/** Fingerprint.com Pro (lab). Override via ?fpKey=…&fpRegion=eu or localStorage. */
+function fpProConfig() {
+  const q = new URLSearchParams(location.search);
+  const key =
+    q.get("fpKey") ||
+    localStorage.getItem("FP_PUBLIC_KEY") ||
+    window.FP_PUBLIC_KEY ||
+    "HHFJDN8H7ThInjfCfEsu";
+  const region = (
+    q.get("fpRegion") ||
+    localStorage.getItem("FP_REGION") ||
+    window.FP_REGION ||
+    "eu"
+  ).toLowerCase();
+  return { key, region: ["us", "eu", "ap"].includes(region) ? region : "eu" };
+}
+
+/**
+ * Fingerprint Pro agent — visitorId + requestId for Server API / dashboard.
+ * Runs after hard suites so we still get full local signals if CDN is slow.
+ */
+async function collectFingerprintPro() {
+  const { key, region } = fpProConfig();
+  const items = {
+    configured: !!key,
+    region,
+    publicKeyHint: key ? `${key.slice(0, 4)}…${key.slice(-4)}` : null,
+    visitorId: null,
+    requestId: null,
+    confidence: null,
+    error: null,
+    blocked: false,
+    componentKeys: [],
+  };
+  if (!key) {
+    items.error = "No FINGERPRINT public key";
+    return {
+      category: "fingerprintPro",
+      label: "Fingerprint.com Pro",
+      entropy: 22,
+      source: "Fingerprint Pro (lab)",
+      items: { ...items, flags: [{ type: "warn", text: "FP Pro not configured" }] },
+    };
+  }
+  try {
+    const loadOpts = region && region !== "us" ? { region } : {};
+    // Official CDN agent (v3). EU workspace requires region: "eu".
+    const FingerprintJS = await import(`https://fpjscdn.net/v3/${key}`);
+    const fp = await FingerprintJS.load(loadOpts);
+    const res = await fp.get();
+    items.visitorId = res.visitorId || null;
+    items.requestId = res.requestId || null;
+    items.confidence = res.confidence?.score ?? null;
+    items.componentKeys = res.components ? Object.keys(res.components).slice(0, 50) : [];
+  } catch (e) {
+    items.error = String(e?.message || e);
+    items.blocked = /block|failed to fetch|network|load|import/i.test(items.error);
+  }
+  const flags = [];
+  if (items.error) {
+    flags.push({
+      type: items.blocked ? "warn" : "danger",
+      text: items.blocked ? "FP Pro agent blocked (CDN/adblock)" : `FP Pro error: ${items.error}`,
+    });
+  } else if (items.confidence != null && items.confidence < 0.5) {
+    flags.push({ type: "warn", text: `Low FP confidence ${items.confidence}` });
+  }
+  return {
+    category: "fingerprintPro",
+    label: "Fingerprint.com Pro",
+    entropy: 22,
+    source: "Fingerprint Pro (lab)",
+    items: { ...items, flags },
+  };
+}
+
 // ─── crypto / hash ───────────────────────────────────────────
 async function sha256(str) {
   const data = new TextEncoder().encode(String(str));
@@ -1438,6 +1514,23 @@ async function runSuite(onProgress) {
   });
   categories.push(...hard3);
 
+  onProgress?.(98, "Fingerprint.com Pro");
+  try {
+    const fpPro = await collectFingerprintPro();
+    if (fpPro) categories.push(fpPro);
+  } catch (e) {
+    categories.push({
+      category: "fingerprintPro",
+      label: "Fingerprint.com Pro (failed)",
+      entropy: 0,
+      source: "Fingerprint Pro (lab)",
+      items: {
+        error: String(e?.message || e),
+        flags: [{ type: "warn", text: "FP Pro collector threw" }],
+      },
+    });
+  }
+
   onProgress?.(100, "Hashing");
 
   // visitor id from high-entropy stable-ish subset
@@ -1517,8 +1610,16 @@ function formatValue(v) {
 
 function render(report) {
   state.report = report;
-  $("#visitor-id").textContent = report.visitorId;
-  $("#run-meta").textContent = `Generated ${new Date(report.generatedAt).toLocaleString()} · ${report.signalCount} signals`;
+  // Prefer Fingerprint Pro visitorId when available (dashboard correlation).
+  const fpPro = report.categories?.find((c) => c.category === "fingerprintPro");
+  const fpVisitor = fpPro?.items?.visitorId;
+  const fpRequest = fpPro?.items?.requestId;
+  const fpConf = fpPro?.items?.confidence;
+  $("#visitor-id").textContent = fpVisitor || report.visitorId;
+  const metaExtra = fpVisitor
+    ? ` · FP Pro ${fpPro?.items?.region || "eu"}${fpConf != null ? ` conf ${Number(fpConf).toFixed(2)}` : ""}${fpRequest ? ` · req ${String(fpRequest).slice(0, 12)}…` : ""}`
+    : "";
+  $("#run-meta").textContent = `Generated ${new Date(report.generatedAt).toLocaleString()} · ${report.signalCount} signals${metaExtra}`;
   $("#uniq-score").textContent = report.uniqueness.score;
   $("#uniq-label").textContent = `~${report.uniqueness.totalEntropy} bits weighted · ${report.uniqueness.collected} categories`;
   const ring = $("#score-ring");
@@ -1531,7 +1632,8 @@ function render(report) {
   const tierBits = report.trust.tiers
     ? ` · C${report.trust.tiers.critical || 0}/H${report.trust.tiers.high || 0}/M${report.trust.tiers.medium || 0}/L${report.trust.tiers.low || 0}`
     : "";
-  $("#trust-label").textContent = `${report.trust.label} · ${report.trust.flagCount || 0} flags${tierBits}`;
+  const fpBits = fpVisitor ? ` · FP ${fpVisitor.slice(0, 10)}…` : "";
+  $("#trust-label").textContent = `${report.trust.label} · ${report.trust.flagCount || 0} flags${tierBits}${fpBits}`;
   const flagsEl = $("#trust-flags");
   flagsEl.innerHTML = "";
   for (const f of report.trust.flags.slice(0, 24)) {
