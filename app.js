@@ -1498,7 +1498,8 @@ function setProgress(pct) {
     $(".top").after(bar);
   }
   bar.classList.add("show");
-  bar.querySelector("i").style.width = `${pct}%`;
+  const fill = bar.querySelector("i");
+  fill.style.transform = `scaleX(${Math.max(0, Math.min(1, pct / 100))})`;
   if (pct >= 100) setTimeout(() => bar.classList.remove("show"), 400);
 }
 
