@@ -1234,6 +1234,66 @@ function computeUniqueness(categories) {
   return { score, totalEntropy: Math.round(totalEntropy * 10) / 10, collected };
 }
 
+/**
+ * Trust scoring: only "louchy" antidetect/automation signals hurt hard.
+ * Soft / environment noise barely moves the needle so a clean browser
+ * with 0–1 soft flags stays ~96–100.
+ */
+function flagSeverity(f) {
+  const id = String(f.id || "").toLowerCase();
+  const text = String(f.text || "").toLowerCase();
+  const blob = `${id} ${text} ${f.source || ""}`;
+
+  // CRITICAL — almost never on a real stock browser
+  const critical = [
+    /webdriver\s*=\s*true/,
+    /webdriver===true/,
+    /cdc_|automation keys|playwright|puppeteer|selenium|phantom|domautomation/,
+    /canvas unstable|audio .*unstable|noise inject/,
+    /software webgl|swiftshader|llvmpipe|software_only|webgl_software/,
+    /prototype|not native|tostring_hook|gopd_hook|function\.prototype\.tostring hooked/,
+    /worker ua ≠|iframe ua ≠|sandbox_ua|multi-realm ua/,
+    /v8-like stacks with firefox|spidermonkey-like stacks with chrome|capture_stack_ff/,
+    /firefox ua \+ window\.chrome|chrome\/edge ua without window\.chrome|safari ua \+ window\.chrome/,
+    /firefox ua \+ useragentdata|safari ua \+ useragentdata/,
+    /windows identity \+ apple gpu|macos identity \+ direct3d/,
+    /ua os ≠|platform\/ua mismatch/,
+  ];
+  for (const re of critical) {
+    if (re.test(blob)) return { tier: "critical", weight: 18 };
+  }
+
+  // HIGH — strong incomplete spoof
+  const high = [
+    /worker webdriver|sharedworker webdriver|iframe webdriver|sandbox_wd|realm_webdriver/,
+    /worker platform|worker hw|sharedworker ua|multi-realm (platform|hw|language)/,
+    /fonts_check_inverted|fake font detected by geometry/,
+    /eme_safari_widevine|feature.?ua|ff_chrome|chrome_no_chrome|ff_uach/,
+    /geometry_drift|emoji_unstable|canvas.*noise/,
+    /tz_offset_lie|timezone.*≠/,
+  ];
+  for (const re of high) {
+    if (re.test(blob)) return { tier: "high", weight: 9 };
+  }
+
+  // MEDIUM — meaningful but not decisive alone
+  const medium = [
+    /mq_device_width|outer_lt_inner|avail_gt_screen/,
+    /perf_now_rfp|heavily rounded/,
+    /headless|empty plugins|concurrency=1/,
+    /locale|languages\[0\]|langs_empty/,
+    /gpu_|identity|client hints/,
+  ];
+  for (const re of medium) {
+    if (re.test(blob)) return { tier: "medium", weight: 4 };
+  }
+
+  // LOW — soft / noisy / env-dependent
+  if (f.type === "warn") return { tier: "low", weight: 1 };
+  if (f.type === "danger") return { tier: "medium", weight: 4 };
+  return { tier: "low", weight: 1 };
+}
+
 function computeTrust(categories) {
   const flags = [];
   for (const c of categories) {
@@ -1244,26 +1304,45 @@ function computeTrust(categories) {
       flags.push({ ...x, source: c.category });
     }
   }
-  // de-dupe by text
   const seen = new Set();
   const uniq = [];
   for (const f of flags) {
-    const k = `${f.type}|${f.text}`;
+    const k = `${f.type}|${f.id || ""}|${f.text}`;
     if (seen.has(k)) continue;
     seen.add(k);
-    uniq.push(f);
+    const sev = flagSeverity(f);
+    uniq.push({ ...f, tier: sev.tier, weight: sev.weight });
   }
-  let score = 100;
-  for (const f of uniq) {
-    if (f.type === "danger") score -= 12;
-    if (f.type === "warn") score -= 5;
+
+  // Diminishing returns: first critical hits hard, piles of low flags barely stack
+  let penalty = 0;
+  const byTier = { critical: 0, high: 0, medium: 0, low: 0 };
+  const sorted = [...uniq].sort((a, b) => b.weight - a.weight);
+  for (let i = 0; i < sorted.length; i++) {
+    const f = sorted[i];
+    byTier[f.tier] = (byTier[f.tier] || 0) + 1;
+    const dim = f.tier === "low" ? 0.55 ** Math.min(byTier.low - 1, 6) : f.tier === "medium" ? 0.85 ** Math.min(byTier.medium - 1, 4) : 1;
+    penalty += f.weight * dim;
   }
-  score = Math.max(0, Math.min(100, score));
+  // Cap: soft-only noise cannot drag below ~90
+  const onlySoft = uniq.length > 0 && uniq.every((f) => f.tier === "low" || f.tier === "medium");
+  if (onlySoft) penalty = Math.min(penalty, 12);
+
+  let score = Math.round(Math.max(0, Math.min(100, 100 - penalty)));
   let label = "Clean";
-  if (score < 40) label = "Highly suspicious";
+  if (score < 45) label = "Highly suspicious";
   else if (score < 70) label = "Anomalies detected";
   else if (score < 90) label = "Minor anomalies";
-  return { score, label, flags: uniq.slice(0, 40), flagCount: uniq.length };
+  else if (uniq.length && score < 100) label = "Mostly clean";
+
+  return {
+    score,
+    label,
+    flags: uniq.slice(0, 40),
+    flagCount: uniq.length,
+    tiers: byTier,
+    penalty: Math.round(penalty * 10) / 10,
+  };
 }
 
 function enrichFlagsWithDiagnostics(categories) {
@@ -1448,13 +1527,17 @@ function render(report) {
     report.uniqueness.score > 75 ? "var(--danger)" : report.uniqueness.score > 50 ? "var(--warn)" : "var(--ok)";
 
   $("#trust-score").textContent = `${report.trust.score}/100`;
-  $("#trust-label").textContent = `${report.trust.label} · ${report.trust.flagCount || 0} flags`;
+  const tierBits = report.trust.tiers
+    ? ` · C${report.trust.tiers.critical || 0}/H${report.trust.tiers.high || 0}/M${report.trust.tiers.medium || 0}/L${report.trust.tiers.low || 0}`
+    : "";
+  $("#trust-label").textContent = `${report.trust.label} · ${report.trust.flagCount || 0} flags${tierBits}`;
   const flagsEl = $("#trust-flags");
   flagsEl.innerHTML = "";
   for (const f of report.trust.flags.slice(0, 24)) {
     const li = document.createElement("li");
-    li.className = f.type;
-    li.textContent = f.source ? `${f.text} [${f.source}]` : f.text;
+    li.className = f.tier === "critical" || f.tier === "high" ? "danger" : f.type === "warn" || f.tier === "low" ? "warn" : f.type;
+    const tier = f.tier ? `${f.tier}` : f.type;
+    li.textContent = f.source ? `${f.text} [${f.source} · ${tier}]` : `${f.text} [${tier}]`;
     flagsEl.appendChild(li);
   }
 

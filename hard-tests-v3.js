@@ -1115,29 +1115,16 @@ export function collectPluginStructure() {
           enabledPluginName: m?.enabledPlugin?.name ?? null,
           enabledPluginIsSelf: tSafe(() => m?.enabledPlugin === p),
         });
-        // Real engines may return a different Plugin wrapper object; compare by name/filename.
+        // Real engines often return distinct Plugin wrapper objects; empty filename
+        // and multi-plugin PDF graphs also vary. Only record metrics — do not flag
+        // reference/name inequality (too many legitimate FP on stock browsers).
         if (m?.enabledPlugin) {
           const en = m.enabledPlugin;
-          const sameRef = en === p;
-          const sameName = en.name === p.name && en.filename === p.filename;
-          entry.mimes[entry.mimes.length - 1].enabledPluginIsSelf = sameRef;
-          entry.mimes[entry.mimes.length - 1].enabledPluginSameIdentity = sameName;
-          if (!sameRef && !sameName) {
-            flags.push({
-              type: "danger",
-              id: "mime_enabled_plugin",
-              text: "mime.enabledPlugin identity ≠ parent plugin",
-              why: "enabledPlugin name/filename does not match parent Plugin — spoofed PluginArray graph. (Reference inequality alone is normal in some engines.)",
-              measured: {
-                plugin: p.name,
-                pluginFile: p.filename,
-                mime: m.type,
-                enabled: en.name,
-                enabledFile: en.filename,
-              },
-              expected: "enabledPlugin name+filename match parent",
-            });
-          }
+          const norm = (s) => String(s ?? "").trim().toLowerCase();
+          entry.mimes[entry.mimes.length - 1].enabledPluginIsSelf = en === p;
+          entry.mimes[entry.mimes.length - 1].enabledPluginSameIdentity =
+            norm(en.name) === norm(p.name) &&
+            (norm(en.filename) === norm(p.filename) || !norm(en.filename) || !norm(p.filename));
         }
       }
       items.details.push(entry);
